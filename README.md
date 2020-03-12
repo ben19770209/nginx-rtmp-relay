@@ -8,7 +8,7 @@
     docker pull ben19770209/nginx-rtmp-relay
     ```
 
-2. 開兩台 container 作為 edge server
+2. 開兩台 container 作為 edge-server，用來接收 relay-server 轉傳過來的 streaming。
 
     指令：
     ```
@@ -20,84 +20,53 @@
     docker run -d --name rtmp-edge-2 -P -e RTMP_STREAM_NAMES=live2 ben19770209/nginx-rtmp-relay
     ```
 
-3. 查詢 container 的網路位置
+3. 查詢 edge-server container 在 network="bridge" 上的 ip 位置，提供給 relay-server 使用。
+
+    (本機開發環境是將所有 relay-server 與 edge-server 都架設在同一台，因此彼此使用 docker network = "bridge" 做溝通。如果在 PROD 各 container 安裝在不同主機上，則應會使用不同 docker network 做溝通，這點要在注意。)
 
     指令：
     ```
-    docker network inspect bridge
+    docker inspect -f {{.NetworkSettings.Networks.bridge.IPAddress}} rtmp-edge-1
     ```
 
     輸出：
     ```
-    [
-        {
-            "Name": "bridge",
-            "Id": "786f1a774479f3112324ed3aaa8b50e4a54972ee6f6d902a595af5af1138798f",
-            "Created": "2020-02-21T00:03:58.134741997Z",
-            "Scope": "local",
-            "Driver": "bridge",
-            "EnableIPv6": false,
-            "IPAM": {
-                "Driver": "default",
-                "Options": null,
-                "Config": [
-                    {
-                        "Subnet": "172.17.0.0/16",
-                        "Gateway": "172.17.0.1"
-                    }
-                ]
-            },
-            "Internal": false,
-            "Attachable": false,
-            "Ingress": false,
-            "ConfigFrom": {
-                "Network": ""
-            },
-            "ConfigOnly": false,
-            "Containers": {
-                "3034b8e29f4da05a62bb33873a6b928e5a277b4caa4198e16d67ebe09a2606e9": {
-                    "Name": "rtmp-edge-2",
-                    "EndpointID": "a5155d6085e1a06938eaec7dcea2172a16651ccec6493f996e17e9a9df8d6fc0",
-                    "MacAddress": "02:42:ac:11:00:03",
-                    "IPv4Address": "172.17.0.3/16",
-                    "IPv6Address": ""
-                },
-                "7fd8811ba4c4e51ea904d6144b0f3c52b4c4109765c3b5a75cead2a3443bf277": {
-                    "Name": "rtmp-edge-1",
-                    "EndpointID": "8304b75783b8be12c3f73151b1869fbcc21c8a322e98dd425f3df3227bb0b270",
-                    "MacAddress": "02:42:ac:11:00:02",
-                    "IPv4Address": "172.17.0.2/16",
-                    "IPv6Address": ""
-                }
-            },
-            "Options": {
-                "com.docker.network.bridge.default_bridge": "true",
-                "com.docker.network.bridge.enable_icc": "true",
-                "com.docker.network.bridge.enable_ip_masquerade": "true",
-                "com.docker.network.bridge.host_binding_ipv4": "0.0.0.0",
-                "com.docker.network.bridge.name": "docker0",
-                "com.docker.network.driver.mtu": "1500"
-            },
-            "Labels": {}
-        }
-    ]
+    172.17.0.2
     ```
-
-4. 查詢 container 的 port
-
+    
     指令：
     ```
-    docker ps
+    docker inspect -f {{.NetworkSettings.Networks.bridge.IPAddress}} rtmp-edge-2
     ```
 
     輸出：
     ```
-    CONTAINER ID        IMAGE                          COMMAND                CREATED              STATUS              PORTS                                              NAMES
-    3034b8e29f4d        ben19770209/nginx-rtmp-relay   "/bin/sh -c /run.sh"   52 seconds ago       Up 51 seconds       0.0.0.0:32793->1935/tcp, 0.0.0.0:32792->8080/tcp   rtmp-edge-2
-    7fd8811ba4c4        ben19770209/nginx-rtmp-relay   "/bin/sh -c /run.sh"   About a minute ago   Up About a minute   0.0.0.0:32791->1935/tcp, 0.0.0.0:32790->8080/tcp   rtmp-edge-1
+    172.17.0.3
     ```
 
-5. 開一台 container 做為負責 relay 的 rtmp server
+4. 查詢 edge-server container 開通 8080/tcp (看報表用) 與 1935/tcp (RTMP用) 給 host 的對外 port 是甚麼，便於開發者在本機 host 上可以透過 localhost:{post} 來瀏覽。
+
+    指令：
+    ```
+    docker inspect -f {{.NetworkSettings.Ports}} rtmp-edge-1
+    ```
+
+    輸出： (run container 的參數 -P "大寫P" 會自動分配欲開通的 ports。若改用參數 -p 9999:1935 -p 8888:8080 (小寫p) 可自訂對外 ports。)
+    ```
+    map[1935/tcp:[{0.0.0.0 32773}] 8080/tcp:[{0.0.0.0 32772}]]
+    ```
+    
+    指令：
+    ```
+    docker inspect -f {{.NetworkSettings.Ports}} rtmp-edge-2
+    ```
+
+    輸出：
+    ```
+    map[1935/tcp:[{0.0.0.0 32775}] 8080/tcp:[{0.0.0.0 32774}]]
+    ```
+
+5. 開一台 container 做為 relay-server，負責接收來自 publish 端的 streaming 再轉發給其他 edge-server。
 
     指令：
     ```
@@ -161,11 +130,32 @@
     OBS 1 的設定：
     ```
     伺服器名稱：rtmp://localhost/Virtual01
-    串流金鑰：mystream
+    串流金鑰：mystream (可不填)
     ```
 
     OBS 2 的設定：
     ```
     伺服器名稱：rtmp://localhost/Virtual02
-    串流金鑰：mystream
+    串流金鑰：mystream (可不填)
     ```
+
+7. 驗證
+
+    * OBS 中可以於 "檢視 > 狀態" 確認直播狀態。
+
+    * 使用 VLC 測試播放，"媒體 > 開啟網路串流" 打開 rtmp://localhost/Virtual01 ，應該可以看見 relay-server 上的 rtmp streaming。
+
+    * 開瀏覽器 http://localhost:8080/stat ，觀看 relay-server 的報表，正常應可看到 Virtual01 > live streams > [EMPTY] (OBS中的串流金鑰 stream name) 這筆會有 4 個 clients。點選開啟後分別是：
+    
+        * publishing | 172.17.0.1 | (來自 OBS 的串流)
+        * playing | 172.17.0.2/live/Virtual01 | (relay 到 edge-server 的串流)
+        * playing | 172.17.0.3/live2/Virtual01 | (relay 到 edge-server 的串流)
+        * playing | 172.17.0.1 | (本機 host 使用 VLC 播放)
+
+    * 使用 VLC 測試播放，"媒體 > 開啟網路串流" 打開 rtmp://localhost:32773/live/Virtual01 ，應該可以看見 edge-server 上的 rtmp streaming。
+
+    * 開瀏覽器 http://localhost:32772/stat ，觀看 edge-server 的報表，正常應可看到 live > live streams > Virtual01 (relay-server 以 application name 作為 stream name 轉送過來的) 這筆會有 2 個 clients。點選開啟後分別是：
+    
+        * publishing | 172.17.0.4 | (來自 relay-server 的串流)
+        * playing | 172.17.0.1 | (本機 host 使用 VLC 播放)
+      
